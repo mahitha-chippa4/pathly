@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { writeFile } from "fs/promises"
-import path from "path"
-import os from "os"
+import { put } from "@vercel/blob"
 
 export async function POST(req: Request) {
   try {
@@ -22,22 +20,21 @@ export async function POST(req: Request) {
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
-    // Save file locally to a temp dir so we don't pollute the git repo, but it persists across page loads
-    const filename = `${session.user.id}_${Date.now()}_${file.name}`
-    const filepath = path.join(os.tmpdir(), filename)
-    await writeFile(filepath, buffer)
+    // Save file directly to Vercel Blob Storage
+    const filename = `${session.user.id}_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`
+    const blob = await put(filename, buffer, { access: 'public' })
 
     // Save to Prisma Profile
     await prisma.profile.upsert({
       where: { user_id: session.user.id },
-      update: { resume_url: filepath },
+      update: { resume_url: blob.url },
       create: {
         user_id: session.user.id,
-        resume_url: filepath,
+        resume_url: blob.url,
       }
     })
 
-    return NextResponse.json({ success: true, filepath })
+    return NextResponse.json({ success: true, filepath: blob.url })
   } catch (error) {
     console.error("Upload error:", error)
     return NextResponse.json({ error: "Failed to upload file" }, { status: 500 })

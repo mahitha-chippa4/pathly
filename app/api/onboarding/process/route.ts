@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
-import { readFile } from "fs/promises"
-import path from "path"
+
 
 export async function POST(req: Request) {
   try {
@@ -19,15 +18,28 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Incomplete profile data for processing" }, { status: 400 })
     }
 
-    // Read the file from disk
-    const fileBuffer = await readFile(profile.resume_url)
+    // Fetch the file from the remote Blob URL
+    const fileRes = await fetch(profile.resume_url)
+    if (!fileRes.ok) {
+      return NextResponse.json({ error: "Failed to download resume from storage" }, { status: 500 })
+    }
+    const fileBuffer = await fileRes.arrayBuffer()
     const fileBlob = new Blob([fileBuffer], { type: "application/pdf" })
 
     // Proxy the request to the Flask Python Backend
     const backendFormData = new FormData()
-    backendFormData.append("file", fileBlob, path.basename(profile.resume_url))
+    // Extract filename from the URL, or default to resume.pdf
+    const filename = profile.resume_url.split('/').pop() || "resume.pdf"
+    backendFormData.append("file", fileBlob, filename)
 
-    const flaskUrl = `http://localhost:8000/api/analyze-resume?target_role=${encodeURIComponent(profile.target_role)}`
+    // Ensure ML_API_URL is configured for Vercel production deployment
+    const mlApiBaseUrl = process.env.ML_API_URL;
+    if (!mlApiBaseUrl) {
+      console.error("Missing ML_API_URL environment variable. Please configure this in your Vercel project settings.");
+      return NextResponse.json({ error: "Server Configuration Error: Missing ML_API_URL" }, { status: 500 })
+    }
+
+    const flaskUrl = `${mlApiBaseUrl}/api/analyze-resume?target_role=${encodeURIComponent(profile.target_role)}`
     
     console.log("Calling Flask API:", flaskUrl)
     const flaskRes = await fetch(flaskUrl, {
